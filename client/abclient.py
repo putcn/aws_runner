@@ -21,7 +21,7 @@ class Abclient(object):
         self.init_args()
         self.log_handler = log_handler
         self.ec2client = boto3.client('ec2')
-    
+
     def init_args(self):
         args = self.args
         if not args.key_name or not args.security_group_id:
@@ -176,9 +176,9 @@ class Abclient(object):
             }, {
                 "Name": "instance-status.reachability",
                 "Values": ["passed"]
-            }, {
-                "Name": "instance-state-name",
-                "Values": ["running"]
+            #}, {
+            #    "Name": "instance-state-name",
+            #    "Values": ["running"]
             }],
             InstanceIds=instance_ids)
 

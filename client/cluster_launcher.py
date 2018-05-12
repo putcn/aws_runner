@@ -178,6 +178,7 @@ def log_handler(source, id):
                 #found key data, trying to add to csv
                 line = line.replace("**metrics_data: ", "")
                 save_metrics_data(line)
+                
 
 abclient = Abclient(args, log_handler)
 

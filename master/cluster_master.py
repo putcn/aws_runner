@@ -318,9 +318,9 @@ def run_instances(image_id, instance_type, count, role, cmd=""):
         }, {
             "Name": "instance-status.reachability",
             "Values": ["passed"]
-        }, {
-            "Name": "instance-state-name",
-            "Values": ["running"]
+        # }, {
+          #  "Name": "instance-state-name",
+           # "Values": ["running"]
         }],
         InstanceIds=instance_ids)
 
@@ -604,8 +604,7 @@ def create_cluster():
 
     pserver_endpoints = []
     for pserver in pserver_create_response:
-        pserver_endpoints.append(pserver["NetworkInterfaces"][0][
-            "PrivateIpAddress"] + ":" + args.pserver_port)
+        pserver_endpoints.append(pserver["PrivateIpAddress"] + ":" + args.pserver_port)
 
     pserver_endpoints_str = ",".join(pserver_endpoints)
 
@@ -615,6 +614,7 @@ def create_cluster():
         pserver_thread = threading.Thread(
             target=kickoff_pserver,
             args=(pserver["PrivateIpAddress"], pserver_endpoints_str))
+        pserver_thread.daemon = True
         pserver_thread.start()
         pserver_threads.append(pserver_thread)
 
@@ -625,8 +625,9 @@ def create_cluster():
         kickoff_cmd=script_to_str(args.trainer_bash_file),
         pserver_endpoints_str=pserver_endpoints_str)
 
-    for pserver_thread in pserver_threads:
-        pserver_thread.join()
+    # pserver does not stop when training is finished, we are going to leave it
+    # for pserver_thread in pserver_threads:
+    #    pserver_thread.join()
 
     logging.info("all process ended")
 
@@ -736,4 +737,4 @@ if __name__ == "__main__":
         create_cluster()
         server_thread.join()
     elif args.action == "test":
-        start_server(args)
+        print("test stopped")
