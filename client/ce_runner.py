@@ -18,6 +18,11 @@ def str2bool(v):
     else:
         raise argparse.ArgumentTypeError('Boolean value expected.')
 
+def print_arguments():
+    print('-----------  Configuration Arguments -----------')
+    for arg, value in sorted(vars(args).iteritems()):
+        print('%s: %s' % (arg, value))
+
 parser = argparse.ArgumentParser(description=__doc__)
 
 parser.add_argument(
