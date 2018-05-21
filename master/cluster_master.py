@@ -375,6 +375,8 @@ def log_to_file(source, filename):
             log_file.write(line)
             if (line.startswith(args.metric_data_identifier)):
                 logging.info(line)
+                log_file.flush()
+                os.fsync(log_file.fileno())
                 #found key data, trying to add to csv
                 line = line.replace(args.metric_data_identifier, "")
                 save_metrics_data(line)
