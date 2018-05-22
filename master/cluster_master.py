@@ -15,6 +15,8 @@ import boto3
 import namesgenerator
 import paramiko
 
+from train_command import TrainCommand
+
 from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
 
 
@@ -383,19 +385,8 @@ def log_to_file(source, filename):
 
 
 def parse_command(command_raw, defaults={}):
-    if not command_raw:
-        command_raw = ""
-    commands_processed = []
-    parameter_map = copy.copy(defaults)
-    for seg in command_raw.split(","):
-        if ":" in seg:
-            parameters = seg.split(":")
-            parameter_map[parameters[0]] = parameters[1]
-        else:
-            commands_processed.append(seg)
-    for key, val in parameter_map.iteritems():
-        commands_processed.append("--" + key + " " + str(val))
-    return " ".join(commands_processed)
+    cmd = TrainCommand(command_raw, defaults)
+    return cmd.to_python_command()
 
 
 def create_trainers(kickoff_cmd, pserver_endpoints_str):

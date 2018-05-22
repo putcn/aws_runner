@@ -2,6 +2,9 @@ import argparse
 import logging
 import sys, os
 import numpy as np
+import threading
+import copy
+from train_command import TrainCommand
 
 # for ce env ONLY
 
@@ -142,9 +145,6 @@ train_speed_kpi = LessWorseKpi('train_speed', 0.01)
 kpis_to_track = {}
 
 def save_to_kpi(name, val):
-    # currently only train speed, train_accuracy and test_accuracy are tracked
-    # they are all LessWorseKpi type
-
     val = float(val)
     if name in kpis_to_track:
         kpi_to_track = kpis_to_track[name]
@@ -152,22 +152,60 @@ def save_to_kpi(name, val):
         kpi_to_track = LessWorseKpi(name, 0.01)
     kpi_to_track.add_record(np.array(val, dtype='float32'))
 
-def log_handler(source, id):
-    for line in iter(source.readline, ""):
-        logging.info(line)
-        if (line.startswith("**metrics_data: ")):
-            # parse and save to kpi
-            str_msg = line.replace("**metrics_data: ", "")
-            metrics_raw = str_msg.split(",")
-            for metric in metrics_raw:
-                metric_data = metric.split("=")
-                save_to_kpi(metric_data[0], metric_data[1])
-                
-            
+class DataCollector(object):
+    def __init__(self):
+        self.store = []
+    def log_processor(self, msg):
+        str_msg = msg.replace("**metrics_data: ", "")
+        metrics_raw = str_msg.split(",")
+        for metric in metrics_raw:
+            metric_data = metric.split("=")
+            if metric_data[0].strip() == "train_speed":
+                self.save(metric_data[1])
+    def save(self, val):
+        self.store.append(float(val))
+    def avg(self):
+        return np.average(self.store)
 
-abclient = Abclient(args, log_handler)
+solo_data_collector = DataCollector()
+def train_without_pserver(args):
+    def log_handler(source, id):
+        for line in iter(source.readline, ""):
+            solo_data_collector.log_processor(line)
+
+    args.pserver_count = 0
+    trainer_command = TrainCommand(args.trainer_command)
+    trainer_command.update({"local":"yes"})
+    args.trainer_command = trainer_command.unparse()
+    abclient = Abclient(args, log_handler)
+    abclient.create()
+
+cluster_data_collector = DataCollector()
+def train_with_pserver(args):
+    def log_handler(source, id):
+        for line in iter(source.readline, ""):
+            cluster_data_collector.log_processor(line)
+
+    abclient = Abclient(args, log_handler)
+    abclient.create()
 
 if __name__ == "__main__":
     print_arguments()
     if args.action == "create":
-        abclient.create()
+        thread_no_pserver = threading.Thread(
+            target=train_without_pserver,
+            args=(copy.copy(args),)
+        )
+        thread_with_pserver = threading.Thread(
+            target=train_with_pserver,
+            args=(copy.copy(args),)
+        )
+        thread_no_pserver.start()
+        thread_with_pserver.start()
+        thread_no_pserver.join()
+        thread_with_pserver.join()
+
+        speedup_rate = cluster_data_collector.avg()/solo_data_collector.avg()
+        logging.info("speed up rate is "+ speedup_rate)
+
+        save_to_kpi("speedup_rate", speedup_rate)

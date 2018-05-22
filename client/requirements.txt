@@ -4,3 +4,4 @@ namesgenerator==0.3
 paramiko==2.4.1
 scp
 requests
+numpy
