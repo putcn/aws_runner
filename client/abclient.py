@@ -16,11 +16,12 @@ import requests
 #Ab stands for aws benchmark
 
 class Abclient(object):
-    def __init__(self, args, log_handler):
+    def __init__(self, args, log_handler, thread_lock = threading.Lock()):
         self.args = args
         self.init_args()
         self.log_handler = log_handler
         self.ec2client = boto3.client('ec2')
+        self.thread_lock = thread_lock
 
     def init_args(self):
         args = self.args
@@ -40,92 +41,93 @@ class Abclient(object):
         return namesgenerator.get_random_name()
     
     def create_subnet(self):
-        args = self.args
-        # if no vpc id provided, list vpcs
-        logging.info("start creating subnet")
-        if not args.vpc_id:
-            logging.info("no vpc provided, trying to find the default one")
-            vpcs_desc = self.ec2client.describe_vpcs(
-                Filters=[{
-                    "Name": "isDefault",
-                    "Values": ["true", ]
-                }], )
-            if len(vpcs_desc["Vpcs"]) == 0:
-                raise ValueError('No default VPC')
-            args.vpc_id = vpcs_desc["Vpcs"][0]["VpcId"]
-            vpc_cidrBlock = vpcs_desc["Vpcs"][0]["CidrBlock"]
+        with self.thread_lock:
+            args = self.args
+            # if no vpc id provided, list vpcs
+            logging.info("start creating subnet")
+            if not args.vpc_id:
+                logging.info("no vpc provided, trying to find the default one")
+                vpcs_desc = self.ec2client.describe_vpcs(
+                    Filters=[{
+                        "Name": "isDefault",
+                        "Values": ["true", ]
+                    }], )
+                if len(vpcs_desc["Vpcs"]) == 0:
+                    raise ValueError('No default VPC')
+                args.vpc_id = vpcs_desc["Vpcs"][0]["VpcId"]
+                vpc_cidrBlock = vpcs_desc["Vpcs"][0]["CidrBlock"]
 
-            logging.info("default vpc fount with id %s and CidrBlock %s" %
-                        (args.vpc_id, vpc_cidrBlock))
+                logging.info("default vpc fount with id %s and CidrBlock %s" %
+                            (args.vpc_id, vpc_cidrBlock))
 
-        if not vpc_cidrBlock:
-            logging.info("trying to find cidrblock for vpc")
-            vpcs_desc = self.ec2client.describe_vpcs(
+            if not vpc_cidrBlock:
+                logging.info("trying to find cidrblock for vpc")
+                vpcs_desc = self.ec2client.describe_vpcs(
+                    Filters=[{
+                        "Name": "vpc-id",
+                        "Values": [args.vpc_id, ],
+                    }], )
+                if len(vpcs_desc["Vpcs"]) == 0:
+                    raise ValueError('No VPC found')
+                vpc_cidrBlock = vpcs_desc["Vpcs"][0]["CidrBlock"]
+                logging.info("cidrblock for vpc is %s" % vpc_cidrBlock)
+
+            # list subnets in vpc in order to create a new one
+
+            logging.info("trying to find ip blocks for new subnet")
+            subnets_desc = self.ec2client.describe_subnets(
                 Filters=[{
                     "Name": "vpc-id",
                     "Values": [args.vpc_id, ],
                 }], )
-            if len(vpcs_desc["Vpcs"]) == 0:
-                raise ValueError('No VPC found')
-            vpc_cidrBlock = vpcs_desc["Vpcs"][0]["CidrBlock"]
-            logging.info("cidrblock for vpc is %s" % vpc_cidrBlock)
 
-        # list subnets in vpc in order to create a new one
+            ips_taken = []
+            for subnet_dec in subnets_desc["Subnets"]:
+                ips_taken.append(subnet_dec["CidrBlock"])
 
-        logging.info("trying to find ip blocks for new subnet")
-        subnets_desc = self.ec2client.describe_subnets(
-            Filters=[{
-                "Name": "vpc-id",
-                "Values": [args.vpc_id, ],
-            }], )
+            ip_blocks_avaliable = netaddr.IPSet(
+                [vpc_cidrBlock]) ^ netaddr.IPSet(ips_taken)
+            # adding 10 addresses as buffer
+            cidr_prefix = 32 - math.ceil(
+                math.log(args.pserver_count + args.trainer_count + 10, 2))
+            if cidr_prefix <= 16:
+                raise ValueError('Too many nodes to fit in current VPC')
 
-        ips_taken = []
-        for subnet_dec in subnets_desc["Subnets"]:
-            ips_taken.append(subnet_dec["CidrBlock"])
+            for ipnetwork in ip_blocks_avaliable.iter_cidrs():
+                try:
+                    subnet_cidr = ipnetwork.subnet(int(cidr_prefix)).next()
+                    logging.info("subnet ip block found %s" % (subnet_cidr))
+                    break
+                except Exception:
+                    pass
 
-        ip_blocks_avaliable = netaddr.IPSet(
-            [vpc_cidrBlock]) ^ netaddr.IPSet(ips_taken)
-        # adding 10 addresses as buffer
-        cidr_prefix = 32 - math.ceil(
-            math.log(args.pserver_count + args.trainer_count + 10, 2))
-        if cidr_prefix <= 16:
-            raise ValueError('Too many nodes to fit in current VPC')
+            if not subnet_cidr:
+                raise ValueError(
+                    'No avaliable subnet to fit required nodes in current VPC')
 
-        for ipnetwork in ip_blocks_avaliable.iter_cidrs():
-            try:
-                subnet_cidr = ipnetwork.subnet(int(cidr_prefix)).next()
-                logging.info("subnet ip block found %s" % (subnet_cidr))
-                break
-            except Exception:
-                pass
+            logging.info("trying to create subnet")
+            subnet_desc = self.ec2client.create_subnet(
+                CidrBlock=str(subnet_cidr),
+                VpcId=args.vpc_id,
+                AvailabilityZone=args.availability_zone)
 
-        if not subnet_cidr:
-            raise ValueError(
-                'No avaliable subnet to fit required nodes in current VPC')
+            subnet_id = subnet_desc["Subnet"]["SubnetId"]
 
-        logging.info("trying to create subnet")
-        subnet_desc = self.ec2client.create_subnet(
-            CidrBlock=str(subnet_cidr),
-            VpcId=args.vpc_id,
-            AvailabilityZone=args.availability_zone)
+            subnet_waiter = self.ec2client.get_waiter('subnet_available')
+            # sleep for 1s before checking its state
+            time.sleep(1)
+            subnet_waiter.wait(SubnetIds=[subnet_id, ])
 
-        subnet_id = subnet_desc["Subnet"]["SubnetId"]
+            logging.info("subnet created")
 
-        subnet_waiter = self.ec2client.get_waiter('subnet_available')
-        # sleep for 1s before checking its state
-        time.sleep(1)
-        subnet_waiter.wait(SubnetIds=[subnet_id, ])
-
-        logging.info("subnet created")
-
-        logging.info("adding tags to newly created subnet")
-        self.ec2client.create_tags(
-            Resources=[subnet_id, ],
-            Tags=[{
-                "Key": "Task_name",
-                'Value': args.task_name
-            }])
-        return subnet_id
+            logging.info("adding tags to newly created subnet")
+            self.ec2client.create_tags(
+                Resources=[subnet_id, ],
+                Tags=[{
+                    "Key": "Task_name",
+                    'Value': args.task_name
+                }])
+            return subnet_id
 
     def run_instances(self, image_id, instance_type, count=1, role="MASTER", cmd=""):
         args = self.args
@@ -244,7 +246,7 @@ class Abclient(object):
         del args_to_pass.master_docker_image
         del args_to_pass.master_server_public_ip
         for arg, value in sorted(vars(args_to_pass).iteritems()):
-            if value:
+            if str(value):
                 kick_off_cmd += ' --%s %s' % (arg, value)
 
         logging.info(kick_off_cmd)

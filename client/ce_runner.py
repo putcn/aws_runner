@@ -155,50 +155,59 @@ def save_to_kpi(name, val):
 class DataCollector(object):
     def __init__(self):
         self.store = []
+        self.metric_data_identifier = "**metrics_data: "
     def log_processor(self, msg):
-        str_msg = msg.replace("**metrics_data: ", "")
-        metrics_raw = str_msg.split(",")
-        for metric in metrics_raw:
-            metric_data = metric.split("=")
-            if metric_data[0].strip() == "train_speed":
-                self.save(metric_data[1])
+        if (msg.startswith(self.metric_data_identifier)):
+            str_msg = msg.replace(self.metric_data_identifier, "")
+            metrics_raw = str_msg.split(",")
+            for metric in metrics_raw:
+                metric_data = metric.split("=")
+                if metric_data[0].strip() == "train_speed":
+                    self.save(metric_data[1])
     def save(self, val):
         self.store.append(float(val))
     def avg(self):
         return np.average(self.store)
 
 solo_data_collector = DataCollector()
-def train_without_pserver(args):
+def train_without_pserver(args, lock):
     def log_handler(source, id):
         for line in iter(source.readline, ""):
+            logging.info("without pserver:")
+            logging.info(line)
             solo_data_collector.log_processor(line)
 
     args.pserver_count = 0
     trainer_command = TrainCommand(args.trainer_command)
     trainer_command.update({"local":"yes"})
     args.trainer_command = trainer_command.unparse()
-    abclient = Abclient(args, log_handler)
+    logging.info(args)
+    abclient = Abclient(args, log_handler, lock)
     abclient.create()
 
 cluster_data_collector = DataCollector()
-def train_with_pserver(args):
+def train_with_pserver(args, lock):
     def log_handler(source, id):
         for line in iter(source.readline, ""):
+            logging.info("with pserver:")
+            logging.info(line)
             cluster_data_collector.log_processor(line)
 
-    abclient = Abclient(args, log_handler)
+    logging.info(args)
+    abclient = Abclient(args, log_handler, lock)
     abclient.create()
 
 if __name__ == "__main__":
     print_arguments()
     if args.action == "create":
+        lock = threading.Lock()
         thread_no_pserver = threading.Thread(
             target=train_without_pserver,
-            args=(copy.copy(args),)
+            args=(copy.copy(args), lock,)
         )
         thread_with_pserver = threading.Thread(
             target=train_with_pserver,
-            args=(copy.copy(args),)
+            args=(copy.copy(args), lock, )
         )
         thread_no_pserver.start()
         thread_with_pserver.start()

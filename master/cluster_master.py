@@ -155,7 +155,7 @@ if args.online_mode:
     logging.basicConfig(
         stream=sys.stdout,
         level=logging.INFO,
-        format='%(asctime)s %(message)s')
+        format='%(message)s')
 else:
     logging.basicConfig(
         filename=args.log_path + 'master.log',
@@ -374,11 +374,11 @@ def log_to_file(source, filename):
         log_files.append(filename)
     with open(args.log_path + filename, "a") as log_file:
         for line in iter(source.readline, ""):
+            logging.info(line)
             log_file.write(line)
+            log_file.flush()
+            os.fsync(log_file.fileno())
             if (line.startswith(args.metric_data_identifier)):
-                logging.info(line)
-                log_file.flush()
-                os.fsync(log_file.fileno())
                 #found key data, trying to add to csv
                 line = line.replace(args.metric_data_identifier, "")
                 save_metrics_data(line)
