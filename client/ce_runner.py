@@ -216,6 +216,6 @@ if __name__ == "__main__":
         thread_with_pserver.join()
 
         speedup_rate = cluster_data_collector.avg()/solo_data_collector.avg()
-        logging.info("speed up rate is "+ speedup_rate)
+        logging.info("speed up rate is "+ str(speedup_rate))
 
-        save_to_kpi("speedup_rate", speedup_rate)
+        save_to_kpi("speedup_rate", speedup_rate.item())
