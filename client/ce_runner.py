@@ -178,6 +178,7 @@ def train_without_pserver(args, lock):
             solo_data_collector.log_processor(line)
 
     args.pserver_count = 0
+    args.trainer_count = 1
     trainer_command = TrainCommand(args.trainer_command)
     trainer_command.update({"local":"yes"})
     args.trainer_command = trainer_command.unparse()
