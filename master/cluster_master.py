@@ -389,7 +389,7 @@ def parse_command(command_raw, defaults={}):
     return cmd.to_python_command()
 
 
-def create_trainers(kickoff_cmd, pserver_endpoints_str):
+def create_trainers(kickoff_cmd, pserver_endpoints_str, pserver_ips_str):
     def create_and_start_trainer(trainer_index):
         logging.info("trainer " + str(trainer_index) + " is starting")
 
@@ -410,15 +410,29 @@ def create_trainers(kickoff_cmd, pserver_endpoints_str):
         logging.info("trainer " + str(trainer_index) +
                      " terminal connected via ssh")
 
+        env_map = {
+            "PSERVER_HOSTS": pserver_endpoints_str,
+            "PSERVERS": pserver_endpoints_str,
+            "TRAINER_INDEX": str(trainer_index),
+            "TASK_NAME": args.task_name,
+            "TRAINER_COUNT": args.trainer_count,
+            "TRAINERS": args.trainer_count,
+            "MASTER_ENDPOINT": args.master_server_ip + ":" + str(args.master_server_port),
+            "PADDLE_TRAINING_ROLE": "TRAINER",
+            "TRAINING_ROLE":"TRAINER",
+            "PADDLE_PSERVER_IPS": pserver_ips_str,
+            "PADDLE_PSERVER_PORT": args.pserver_port,
+            "PADDLE_TRAINERS": args.trainer_count,
+            "PADDLE_CURRENT_IP": trainer_ip,
+            "PADDLE_TRAINER_ID": str(trainer_index), 
+            "PADDLE_INIT_TRAINER_ID": str(trainer_index), 
+        }
+
         cmd = kickoff_cmd.format(
-            PSERVER_HOSTS=pserver_endpoints_str,
-            DOCKER_IMAGE=args.docker_image,
-            TRAINER_INDEX=str(trainer_index),
-            TASK_NAME=args.task_name,
-            TRAINER_COUNT=args.trainer_count,
             COMMAND=parse_command(args.trainer_command, {"device": "GPU"}),
-            MASTER_ENDPOINT=args.master_server_ip + ":" +
-            str(args.master_server_port))
+            ENV=generate_env(env_map),
+            DOCKER_IMAGE=args.docker_image,
+        )
         logging.info(cmd)
 
         stdin, stdout, stderr = ssh_client.exec_command(command=cmd)
@@ -522,26 +536,44 @@ def cleanup(task_name):
     logging.info("Clearnup done")
     return
 
+def generate_env(env_map):
+    out_list = []
+    for key, val in env_map.iteritems():
+        out_list.append("-e \"%s=%s\"" % (key, val))
+    return " ".join(out_list)
 
-def kickoff_pserver(host, pserver_endpoints_str):
+
+def kickoff_pserver(host, pserver_endpoints_str, pserver_ips_str):
     try:
         ssh_key = paramiko.RSAKey.from_private_key_file(args.pem_path)
         ssh_client = paramiko.SSHClient()
         ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         ssh_client.connect(hostname=host, username="ubuntu", pkey=ssh_key)
+        env_map = {
+            "PSERVER_HOSTS": pserver_endpoints_str,
+            "PSERVERS": pserver_endpoints_str,
+            "PSERVER_PORT": args.pserver_port,
+            "TASK_NAME": args.task_name,
+            "TRAINER_COUNT": args.trainer_count,
+            "TRAINERS": args.trainer_count,
+            "TRAINER_INDEX": 0,
+            "SERVER_ENDPOINT": host + ":" + str(args.pserver_port),
+            "MASTER_ENDPOINT": args.master_server_ip + ":" +str(args.master_server_port),
+            "PADDLE_TRAINING_ROLE": "PSERVER",
+            "TRAINING_ROLE": "PSERVER",
+            "PADDLE_PSERVER_PORT": args.pserver_port,
+            "PADDLE_PSERVER_IPS": pserver_ips_str,
+            "PADDLE_TRAINERS": args.trainer_count,
+            "PADDLE_CURRENT_IP": host,
+            "PADDLE_TRAINER_ID": 0,
+        }
+
         cmd = (script_to_str(args.pserver_bash_file)).format(
-            PSERVER_HOSTS=pserver_endpoints_str,
-            DOCKER_IMAGE=args.docker_image,
-            PSERVER_PORT=args.pserver_port,
-            TASK_NAME=args.task_name,
+            ENV=generate_env(env_map),
             COMMAND=parse_command(args.pserver_command, {"device": "CPU"}),
-            TRAINER_COUNT=args.trainer_count,
-            TRAINER_INDEX=0,
-            # there is no way to use 0.0.0.0:port to start pserver
-            # has to docker --network="host" with host ip to make this work
-            SERVER_ENDPOINT=host + ":" + str(args.pserver_port),
-            MASTER_ENDPOINT=args.master_server_ip + ":" +
-            str(args.master_server_port))
+            DOCKER_IMAGE=args.docker_image,
+        )
+
         logging.info(cmd)
         stdin, stdout, stderr = ssh_client.exec_command(command=cmd)
 
@@ -596,8 +628,10 @@ def create_cluster():
     logging.info("pserver created, collecting pserver ips")
 
     pserver_endpoints = []
+    pserver_ips = []
     for pserver in pserver_create_response:
         pserver_endpoints.append(pserver["PrivateIpAddress"] + ":" + args.pserver_port)
+        pserver_ips.append(pserver["PrivateIpAddress"])
 
     pserver_endpoints_str = ",".join(pserver_endpoints)
 
@@ -606,7 +640,7 @@ def create_cluster():
     for pserver in pserver_create_response:
         pserver_thread = threading.Thread(
             target=kickoff_pserver,
-            args=(pserver["PrivateIpAddress"], pserver_endpoints_str))
+            args=(pserver["PrivateIpAddress"], pserver_endpoints_str, ",".join(pserver_ips), ))
         pserver_thread.daemon = True
         pserver_thread.start()
         pserver_threads.append(pserver_thread)
@@ -616,7 +650,9 @@ def create_cluster():
     logging.info("creating trainers and kicking off trainer training process")
     create_trainers(
         kickoff_cmd=script_to_str(args.trainer_bash_file),
-        pserver_endpoints_str=pserver_endpoints_str)
+        pserver_endpoints_str=pserver_endpoints_str,
+        pserver_ips_str=",".join(pserver_ips)
+    )
 
     # pserver does not stop when training is finished, we are going to leave it
     # for pserver_thread in pserver_threads:
